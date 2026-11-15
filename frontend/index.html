@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Demo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>RAG Demo <small>Retrieval-Augmented Generation, step by step</small></h1>
+  <div class="settings" title="Used by Embedding map, Retrieval, Re-rank and Ask">
+    <label>Doc chunking
+      <select id="cfg-doc">
+        <option value="paragraph">paragraph</option>
+        <option value="sentence">sentence</option>
+        <option value="fixed_size">fixed_size</option>
+        <option value="none">none</option>
+      </select>
+    </label>
+    <label>SQL chunking
+      <select id="cfg-sql">
+        <option value="row">row</option>
+        <option value="entity">entity</option>
+        <option value="schema">schema</option>
+        <option value="none">none</option>
+      </select>
+    </label>
+    <label>Embedder
+      <select id="cfg-emb">
+        <option value="minilm">MiniLM (semantic)</option>
+        <option value="tfidf">TF-IDF (keywords)</option>
+      </select>
+    </label>
+    <span id="azure-status" class="pill"></span>
+  </div>
+</header>
+
+<nav id="tabs">
+  <button data-tab="data" class="active">0. Data</button>
+  <button data-tab="chunk">1. Chunking</button>
+  <button data-tab="embed">2. Embedding</button>
+  <button data-tab="retrieve">3. Retrieval</button>
+  <button data-tab="rerank">4. Re-ranking</button>
+  <button data-tab="ask">5. Ask</button>
+  <button data-tab="upload">6. Your document</button>
+</nav>
+
+<main>
+  <!-- 0. DATA ---------------------------------------------------------->
+  <section id="tab-data" class="tab active">
+    <div class="concept">
+      <b>The knowledge base.</b> RAG lets an LLM answer from <i>your</i> data instead of only its training data.
+      Here we have two kinds of source: unstructured <b>documents</b> (store policies) and structured
+      <b>SQL tables</b> (products, customers, orders). The pipeline is:
+      <code>chunk → embed → retrieve → re-rank → generate</code>.
+    </div>
+    <div class="cols">
+      <div><h3>Documents</h3><div id="data-docs"></div></div>
+      <div><h3>SQL tables</h3><div id="data-sql"></div></div>
+    </div>
+  </section>
+
+  <!-- 1. CHUNKING ------------------------------------------------------>
+  <section id="tab-chunk" class="tab">
+    <div class="concept">
+      <b>Chunking</b> splits data into pieces small enough to embed and to fit in a prompt, but big enough to
+      keep meaning. <b>Docs:</b> <i>fixed_size</i> cuts every N characters (may cut sentences),
+      <i>sentence</i> groups whole sentences, <i>paragraph</i> follows the document's headings.
+      <b>SQL:</b> <i>row</i> turns each row into a sentence, <i>entity</i> JOINs tables so one chunk = one
+      customer with all their orders, <i>schema</i> describes each table (used for text-to-SQL).
+    </div>
+    <div class="controls">
+      <label>Source <select id="ch-source"><option value="docs">docs</option><option value="sql">sql</option></select></label>
+      <label>Strategy <select id="ch-strategy"></select></label>
+      <label class="fixed-only">Size <input id="ch-size" type="number" value="300" min="50" step="50"></label>
+      <label class="fixed-only">Overlap <input id="ch-overlap" type="number" value="50" min="0" step="10"></label>
+      <label class="sent-only">Sentences <input id="ch-sent" type="number" value="3" min="1"></label>
+      <button id="ch-run">Chunk</button>
+    </div>
+    <div id="ch-stats" class="stats"></div>
+    <div id="ch-out" class="cards"></div>
+  </section>
+
+  <!-- 2. EMBEDDING ----------------------------------------------------->
+  <section id="tab-embed" class="tab">
+    <div class="concept">
+      <b>Embedding</b> turns text into a list of numbers (a vector). Texts with similar meaning get vectors
+      pointing the same way, measured with <b>cosine similarity</b> (1 = same, 0 = unrelated).
+      <b>TF-IDF</b> only matches shared words; <b>MiniLM</b> is a neural model that matches meaning.
+      Try it: "send back" vs "return".
+    </div>
+    <h3>A. Compare similarity</h3>
+    <div class="controls">
+      <textarea id="em-texts" rows="5">How do I return my headphones?
+Can I send back something I bought?
+What is the refund policy?
+How long does delivery take?</textarea>
+      <button id="em-run">Compare</button>
+    </div>
+    <div id="em-out" class="cols"></div>
+
+    <h3>B. Map of all chunks (2D projection with PCA, coloured by k-means cluster)</h3>
+    <div class="controls">
+      <input id="map-query" placeholder="Optional question to plot, e.g. Can I pay in instalments?" size="50">
+      <label>Clusters <input id="map-k" type="number" value="5" min="2" max="12"></label>
+      <button id="map-run">Draw map</button>
+    </div>
+    <div class="map-wrap"><svg id="map" viewBox="0 0 700 420"></svg><div id="map-info"></div></div>
+  </section>
+
+  <!-- 3. RETRIEVAL ----------------------------------------------------->
+  <section id="tab-retrieve" class="tab">
+    <div class="concept">
+      <b>Retrieval</b> finds the top-N chunks for a question. <i>dense</i> = cosine similarity of embeddings,
+      <i>bm25</i> = keyword scoring, <i>hybrid</i> = merges both rankings with Reciprocal Rank Fusion,
+      <i>kmeans</i> = only searches the cluster whose centre is closest to the question (fast on big data,
+      but can miss answers in other clusters).
+    </div>
+    <div class="controls">
+      <input id="rt-query" value="Can I send back headphones I don't like?" size="50">
+      <label>Top-N <input id="rt-n" type="number" value="5" min="1" max="20"></label>
+      <button id="rt-run">Compare all 4 retrievers</button>
+    </div>
+    <div id="rt-out" class="cols four"></div>
+  </section>
+
+  <!-- 4. RE-RANKING ---------------------------------------------------->
+  <section id="tab-rerank" class="tab">
+    <div class="concept">
+      <b>Re-ranking</b> takes the N retrieved candidates and keeps the best K for the prompt.
+      <i>mmr</i> balances relevance against repeating what is already picked,
+      <i>kmeans</i> clusters the candidates and keeps the best from each cluster (diversity),
+      <i>cross_encoder</i> is a model that reads question + chunk together and scores the pair (most accurate, slowest).
+    </div>
+    <div class="controls">
+      <input id="rr-query" value="Is accidental damage covered?" size="50">
+      <label>Retriever <select id="rr-ret">
+        <option>hybrid</option><option>dense</option><option>bm25</option><option>kmeans</option></select></label>
+      <label>Re-ranker <select id="rr-method">
+        <option>cross_encoder</option><option>mmr</option><option>kmeans</option><option>none</option></select></label>
+      <label>N <input id="rr-n" type="number" value="8" min="1" max="20"></label>
+      <label>K <input id="rr-k" type="number" value="3" min="1" max="10"></label>
+      <button id="rr-run">Re-rank</button>
+    </div>
+    <div class="cols"><div><h3>Before (retrieval top-N)</h3><div id="rr-before"></div></div>
+                      <div><h3>After (re-ranked top-K)</h3><div id="rr-after"></div></div></div>
+  </section>
+
+  <!-- 5. ASK ----------------------------------------------------------->
+  <section id="tab-ask" class="tab">
+    <div class="concept">
+      <b>Generation.</b> The re-ranked chunks are pasted into a prompt and sent to an OpenAI model on
+      <b>Azure AI Foundry</b>, which answers using only that context and cites the chunks.
+      Without Azure keys you still see the exact prompt.
+    </div>
+    <div class="controls">
+      <input id="ask-query" value="I bought headphones 2 weeks ago, can I return them and how long is the refund?" size="70">
+      <label>Retriever <select id="ask-ret">
+        <option>hybrid</option><option>dense</option><option>bm25</option><option>kmeans</option></select></label>
+      <label>Re-ranker <select id="ask-rr">
+        <option>cross_encoder</option><option>mmr</option><option>kmeans</option><option>none</option></select></label>
+      <button id="ask-run">Ask</button>
+    </div>
+    <div id="ask-out"></div>
+  </section>
+
+  <!-- 6. YOUR DOCUMENT ------------------------------------------------->
+  <section id="tab-upload" class="tab">
+    <div class="concept">
+      <b>RAG over your own file.</b> Upload a PDF, Word (.docx) or text file. The same pipeline runs on it:
+      extract text (page by page for PDFs) → chunk → embed → retrieve → re-rank → answer with citations.
+      Uploads stay in server memory only and are cleared when the server restarts.
+      Scanned PDFs (images of text) need OCR and won't work.
+    </div>
+    <div class="controls">
+      <input id="up-file" type="file" accept=".pdf,.docx,.txt,.md">
+      <button id="up-run">Upload</button>
+      <label>Document <select id="up-doc"><option value="">(upload a file first)</option></select></label>
+    </div>
+    <div id="up-info"></div>
+
+    <h3>Chunking and search settings</h3>
+    <div class="controls">
+      <label>Chunking <select id="up-strategy">
+        <option value="paragraph">paragraph</option><option value="sentence">sentence</option>
+        <option value="fixed_size">fixed_size</option></select></label>
+      <label class="up-fixed">Size <input id="up-size" type="number" value="500" min="100" step="50"></label>
+      <label class="up-fixed">Overlap <input id="up-overlap" type="number" value="100" min="0" step="25"></label>
+      <label>Embedder <select id="up-emb">
+        <option value="minilm">MiniLM (semantic)</option><option value="tfidf">TF-IDF (keywords)</option></select></label>
+      <label>Retriever <select id="up-ret">
+        <option>hybrid</option><option>dense</option><option>bm25</option><option>kmeans</option></select></label>
+      <label>Re-ranker <select id="up-rr">
+        <option>cross_encoder</option><option>mmr</option><option>kmeans</option><option>none</option></select></label>
+      <button id="up-chunks" class="secondary">Show chunks</button>
+    </div>
+
+    <div class="controls">
+      <input id="up-query" placeholder="Ask a question about your document" size="70">
+      <button id="up-ask">Ask</button>
+    </div>
+    <div id="up-out"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
